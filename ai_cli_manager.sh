@@ -112,10 +112,10 @@ prompt_required() {
   local label="$1"
   local value=""
   while [ -z "$value" ]; do
-    printf '%s: ' "$label"
-    read -r value
+    printf '%s: ' "$label" >&2
+    read -r -u "$INPUT_FD" value
     if [ -z "$value" ]; then
-      warn "$label 不能为空。"
+      warn "$label 不能为空。" >&2
     fi
   done
   printf '%s' "$value"
@@ -125,8 +125,8 @@ prompt_default() {
   local label="$1"
   local default_value="$2"
   local value=""
-  printf '%s [%s]: ' "$label" "$default_value"
-  read -r value
+  printf '%s [%s]: ' "$label" "$default_value" >&2
+  read -r -u "$INPUT_FD" value
   if [ -z "$value" ]; then
     value="$default_value"
   fi
