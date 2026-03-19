@@ -15,6 +15,17 @@ CODEX_CONFIG_END="# <<< AI_CLI_MANAGER_CODEX_PROVIDER <<<"
 
 mkdir -p "$MANAGER_DIR" "$BACKUP_DIR"
 
+INPUT_FD=0
+HAS_INTERACTIVE_INPUT=1
+if [ ! -t 0 ]; then
+  if [ -t 1 ] && [ -r /dev/tty ]; then
+    INPUT_FD=9
+    exec 9</dev/tty
+  else
+    HAS_INTERACTIVE_INPUT=0
+  fi
+fi
+
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
 elif command -v sudo >/dev/null 2>&1; then
@@ -42,7 +53,10 @@ error() {
 
 pause() {
   printf '\n按回车继续...'
-  read -r _
+  if ! read -r -u "$INPUT_FD" _; then
+    printf '\n'
+    exit 0
+  fi
 }
 
 backup_file() {
@@ -323,7 +337,9 @@ print_status() {
 }
 
 show_menu() {
-  clear
+  if [ -t 1 ] && command -v tput >/dev/null 2>&1 && tput clear >/dev/null 2>&1; then
+    tput clear
+  fi
   log "AI CLI 管理脚本"
   log "================"
   print_status
@@ -341,10 +357,21 @@ show_menu() {
 
 main_loop() {
   local choice=""
+  if [ "$HAS_INTERACTIVE_INPUT" -ne 1 ]; then
+    error "当前没有可交互终端，菜单模式无法读取输入。"
+    error "请改用以下方式执行："
+    error "1. 先下载: curl -fsSL -o ai_cli_manager.sh https://raw.githubusercontent.com/bonkcn/ai-cli-manager/main/ai_cli_manager.sh"
+    error "2. 再运行: bash ai_cli_manager.sh"
+    exit 1
+  fi
+
   while true; do
     show_menu
     printf '请选择功能编号: '
-    read -r choice
+    if ! read -r -u "$INPUT_FD" choice; then
+      printf '\n'
+      exit 0
+    fi
     case "$choice" in
       1)
         install_claude_code
