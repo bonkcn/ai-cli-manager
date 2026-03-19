@@ -16,3 +16,13 @@
 ```bash
 bash ai_cli_manager.sh
 ```
+
+## 一键执行
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bonkcn/ai-cli-manager/main/ai_cli_manager.sh | bash
+```
+
+```bash
+curl -fsSL -o ai_cli_manager.sh https://raw.githubusercontent.com/bonkcn/ai-cli-manager/main/ai_cli_manager.sh && bash ai_cli_manager.sh
+```
