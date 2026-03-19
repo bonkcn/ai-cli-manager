@@ -143,22 +143,212 @@ json_escape() {
   printf '%s' "$s"
 }
 
+NODEJS_MAJOR=22
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+download_to_stdout() {
+  local url="$1"
+  if command_exists curl; then
+    curl -fsSL "$url"
+    return $?
+  fi
+  if command_exists wget; then
+    wget -qO- "$url"
+    return $?
+  fi
+  return 127
+}
+
+download_to_file() {
+  local url="$1"
+  local output="$2"
+  if command_exists curl; then
+    curl -fsSL "$url" -o "$output"
+    return $?
+  fi
+  if command_exists wget; then
+    wget -qO "$output" "$url"
+    return $?
+  fi
+  return 127
+}
+
+detect_package_manager() {
+  local pm=""
+  for pm in apt-get dnf yum apk pacman zypper; do
+    if command_exists "$pm"; then
+      printf '%s' "$pm"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_prerequisites() {
+  local pm="$1"
+  case "$pm" in
+    apt-get)
+      $SUDO apt-get update
+      $SUDO apt-get install -y ca-certificates curl gnupg xz-utils
+      ;;
+    dnf)
+      $SUDO dnf install -y ca-certificates curl gnupg2 xz
+      ;;
+    yum)
+      $SUDO yum install -y ca-certificates curl gnupg2 xz
+      ;;
+    apk)
+      $SUDO apk add --no-cache ca-certificates curl xz
+      ;;
+    pacman)
+      $SUDO pacman -Sy --noconfirm ca-certificates curl xz
+      ;;
+    zypper)
+      $SUDO zypper --non-interactive install ca-certificates curl xz
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_node_via_package_manager() {
+  local pm="$1"
+  case "$pm" in
+    apt-get)
+      install_prerequisites "$pm" || return 1
+      download_to_stdout "https://deb.nodesource.com/setup_${NODEJS_MAJOR}.x" | $SUDO bash -
+      $SUDO apt-get install -y nodejs
+      ;;
+    dnf)
+      install_prerequisites "$pm" || return 1
+      download_to_stdout "https://rpm.nodesource.com/setup_${NODEJS_MAJOR}.x" | $SUDO bash -
+      $SUDO dnf install -y nodejs
+      ;;
+    yum)
+      install_prerequisites "$pm" || return 1
+      download_to_stdout "https://rpm.nodesource.com/setup_${NODEJS_MAJOR}.x" | $SUDO bash -
+      $SUDO yum install -y nodejs
+      ;;
+    apk)
+      install_prerequisites "$pm" || return 1
+      $SUDO apk add --no-cache nodejs npm
+      ;;
+    pacman)
+      install_prerequisites "$pm" || return 1
+      $SUDO pacman -Sy --noconfirm nodejs npm
+      ;;
+    zypper)
+      install_prerequisites "$pm" || return 1
+      $SUDO zypper --non-interactive install nodejs22 npm22 || \
+        $SUDO zypper --non-interactive install nodejs npm
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+get_node_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)
+      printf 'x64'
+      ;;
+    aarch64|arm64)
+      printf 'arm64'
+      ;;
+    armv7l)
+      printf 'armv7l'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_node_via_tarball() {
+  local arch tmp_dir shasums_url tarball_name tarball_url tarball_path extract_dir target_dir node_version
+  arch="$(get_node_arch)" || {
+    error "当前系统架构 $(uname -m) 暂不支持自动安装 Node.js。"
+    return 1
+  }
+
+  if ! command_exists tar; then
+    error "缺少 tar，无法解压 Node.js 安装包。"
+    return 1
+  fi
+
+  if ! command_exists xz; then
+    local pm
+    pm="$(detect_package_manager 2>/dev/null || true)"
+    if [ -n "$pm" ]; then
+      install_prerequisites "$pm" || return 1
+    fi
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  shasums_url="https://nodejs.org/dist/latest-v${NODEJS_MAJOR}.x/SHASUMS256.txt"
+  tarball_name="$(download_to_stdout "$shasums_url" | awk "/linux-${arch}\\.tar\\.xz$/ {print \$2; exit}")"
+  if [ -z "$tarball_name" ]; then
+    rm -rf "$tmp_dir"
+    error "无法获取 Node.js ${NODEJS_MAJOR} 的官方下载信息。"
+    return 1
+  fi
+
+  tarball_url="https://nodejs.org/dist/latest-v${NODEJS_MAJOR}.x/${tarball_name}"
+  tarball_path="${tmp_dir}/${tarball_name}"
+  log "未发现可用包管理器安装方案，回退到 Node.js 官方二进制包 ..."
+  download_to_file "$tarball_url" "$tarball_path" || {
+    rm -rf "$tmp_dir"
+    error "下载 Node.js 官方安装包失败。"
+    return 1
+  }
+
+  extract_dir="${tmp_dir}/extract"
+  mkdir -p "$extract_dir"
+  tar -xJf "$tarball_path" -C "$extract_dir" || {
+    rm -rf "$tmp_dir"
+    error "解压 Node.js 官方安装包失败。"
+    return 1
+  }
+
+  node_version="${tarball_name%.tar.xz}"
+  target_dir="/usr/local/lib/${node_version}"
+  $SUDO mkdir -p /usr/local/lib /usr/local/bin
+  $SUDO rm -rf "$target_dir"
+  $SUDO cp -R "${extract_dir}/${node_version}" "$target_dir"
+  $SUDO ln -sf "${target_dir}/bin/node" /usr/local/bin/node
+  $SUDO ln -sf "${target_dir}/bin/npm" /usr/local/bin/npm
+  $SUDO ln -sf "${target_dir}/bin/npx" /usr/local/bin/npx
+  $SUDO ln -sf "${target_dir}/bin/corepack" /usr/local/bin/corepack
+  rm -rf "$tmp_dir"
+}
+
 ensure_node() {
   if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     success "Node.js 已可用: $(node -v), npm $(npm -v)"
     return 0
   fi
 
-  if ! command -v apt-get >/dev/null 2>&1; then
-    error "当前缺少 Node.js，且系统没有 apt-get。请先手动安装 Node.js。"
-    return 1
+  local pm=""
+  pm="$(detect_package_manager 2>/dev/null || true)"
+
+  log "正在安装 Node.js ${NODEJS_MAJOR} ..."
+  if [ -n "$pm" ]; then
+    log "检测到包管理器: ${pm}"
+    install_node_via_package_manager "$pm" || warn "通过 ${pm} 安装 Node.js 失败，准备尝试官方二进制安装。"
+  else
+    warn "未检测到受支持的包管理器，准备尝试官方二进制安装。"
   fi
 
-  log "正在安装 Node.js 22 ..."
-  $SUDO apt-get update
-  $SUDO apt-get install -y ca-certificates curl gnupg
-  curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash -
-  $SUDO apt-get install -y nodejs
+  if ! command_exists node || ! command_exists npm; then
+    install_node_via_tarball || return 1
+  fi
+
+  hash -r
 
   if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     success "Node.js 安装完成: $(node -v), npm $(npm -v)"
@@ -172,7 +362,7 @@ ensure_node() {
 install_claude_code() {
   ensure_node || return 1
   log "正在安装 Claude Code ..."
-  npm install -g @anthropic-ai/claude-code
+  $SUDO npm install -g @anthropic-ai/claude-code
   if command -v claude >/dev/null 2>&1; then
     success "Claude Code 安装完成: $(claude --version 2>/dev/null || echo "版本检测失败")"
   else
@@ -184,7 +374,7 @@ install_claude_code() {
 install_codex() {
   ensure_node || return 1
   log "正在安装 Codex ..."
-  npm install -g @openai/codex
+  $SUDO npm install -g @openai/codex
   if command -v codex >/dev/null 2>&1; then
     success "Codex 安装完成: $(codex --version 2>/dev/null || echo "版本检测失败")"
   else
