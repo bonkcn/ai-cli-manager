@@ -143,6 +143,35 @@ json_escape() {
   printf '%s' "$s"
 }
 
+shell_escape() {
+  printf '%q' "$1"
+}
+
+double_quote_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//\$/\\$}"
+  s="${s//\`/\\\`}"
+  printf '%s' "$s"
+}
+
+claude_env_exports_present() {
+  local file="$1"
+  grep -Eq '^[[:space:]]*export ANTHROPIC_(AUTH_TOKEN|BASE_URL)=' "$file" 2>/dev/null
+}
+
+strip_claude_env_exports() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+
+  awk '
+    /^[[:space:]]*export ANTHROPIC_AUTH_TOKEN=/ { next }
+    /^[[:space:]]*export ANTHROPIC_BASE_URL=/ { next }
+    { print }
+  ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
 NODEJS_MAJOR=22
 
 command_exists() {
@@ -399,19 +428,38 @@ install_all() {
 }
 
 configure_claude_provider() {
-  local base_url api_key block
+  local base_url api_key block bashrc_file has_existing_config auth_export_line base_export_line
+  bashrc_file="${HOME}/.bashrc"
+  has_existing_config=0
+  if grep -q "$CLAUDE_BASHRC_START" "$bashrc_file" 2>/dev/null || claude_env_exports_present "$bashrc_file"; then
+    has_existing_config=1
+  fi
+
   base_url="$(prompt_required "请输入 Claude 提供商 base URL")"
   api_key="$(prompt_required "请输入 Claude 提供商 API Key")"
 
-  backup_file "${HOME}/.bashrc"
+  auth_export_line="export ANTHROPIC_AUTH_TOKEN=$(shell_escape "$api_key")"
+  base_export_line="export ANTHROPIC_BASE_URL=$(shell_escape "$base_url")"
+
+  backup_file "$bashrc_file"
+  strip_block "$bashrc_file" "$CLAUDE_BASHRC_START" "$CLAUDE_BASHRC_END"
+  strip_claude_env_exports "$bashrc_file"
   block=$(cat <<EOF
-export ANTHROPIC_BASE_URL="$(printf '%s' "$base_url")"
-export ANTHROPIC_AUTH_TOKEN="$(printf '%s' "$api_key")"
+$auth_export_line
+$base_export_line
 EOF
 )
-  append_block "${HOME}/.bashrc" "$CLAUDE_BASHRC_START" "$CLAUDE_BASHRC_END" "$block"
+  append_block "$bashrc_file" "$CLAUDE_BASHRC_START" "$CLAUDE_BASHRC_END" "$block"
   success "Claude 提供商配置已写入 ${HOME}/.bashrc"
-  log "请执行: source ~/.bashrc"
+
+  if [ "$has_existing_config" -eq 0 ]; then
+    log "首次配置 Claude Code，可参考以下命令："
+    log "echo \"$(double_quote_escape "$auth_export_line")\" >> ~/.bashrc"
+    log "echo \"$(double_quote_escape "$base_export_line")\" >> ~/.bashrc"
+  else
+    log "检测到旧的 Claude ANTHROPIC_* 配置，已先清除再覆盖。"
+  fi
+  log "source ~/.bashrc"
 }
 
 configure_codex_provider() {
@@ -471,7 +519,8 @@ uninstall_claude_code() {
 
   backup_file "${HOME}/.bashrc"
   strip_block "${HOME}/.bashrc" "$CLAUDE_BASHRC_START" "$CLAUDE_BASHRC_END"
-  success "Claude Code 卸载已执行，并从 ${HOME}/.bashrc 中移除了受控 Claude 配置"
+  strip_claude_env_exports "${HOME}/.bashrc"
+  success "Claude Code 卸载已执行，并从 ${HOME}/.bashrc 中移除了 Claude ANTHROPIC 配置"
 }
 
 uninstall_codex() {
@@ -513,10 +562,10 @@ print_status() {
     log "Codex: 未安装"
   fi
 
-  if grep -q "$CLAUDE_BASHRC_START" "${HOME}/.bashrc" 2>/dev/null; then
-    log "Claude 提供商: 已存在受控 ~/.bashrc 配置块"
+  if grep -q "$CLAUDE_BASHRC_START" "${HOME}/.bashrc" 2>/dev/null || claude_env_exports_present "${HOME}/.bashrc"; then
+    log "Claude 提供商: 已存在 ~/.bashrc 中的 ANTHROPIC 配置"
   else
-    log "Claude 提供商: 未发现受控 ~/.bashrc 配置块"
+    log "Claude 提供商: 未发现 ~/.bashrc 中的 ANTHROPIC 配置"
   fi
 
   if grep -q "$CODEX_CONFIG_START" "${HOME}/.codex/config.toml" 2>/dev/null; then
@@ -534,13 +583,22 @@ show_menu() {
   log "================"
   print_status
   log ""
+  log "Claude Code"
+  log "------------"
   log "1. 安装 Claude Code"
-  log "2. 安装 Codex"
   log "3. 更换 Claude Code 提供商"
-  log "4. 更换 Codex 提供商"
   log "5. 卸载 Claude Code"
+  log ""
+  log "------------"
+  log "Codex"
+  log "------------"
+  log "2. 安装 Codex"
+  log "4. 更换 Codex 提供商"
   log "6. 卸载 Codex"
+  log ""
+  log "------------"
   log "7. 一键安装全部"
+  log "------------"
   log "0. 退出"
   log ""
 }
