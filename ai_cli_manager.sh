@@ -147,15 +147,6 @@ shell_escape() {
   printf '%q' "$1"
 }
 
-double_quote_escape() {
-  local s="$1"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  s="${s//\$/\\$}"
-  s="${s//\`/\\\`}"
-  printf '%s' "$s"
-}
-
 claude_env_exports_present() {
   local file="$1"
   grep -Eq '^[[:space:]]*export ANTHROPIC_(AUTH_TOKEN|BASE_URL)=' "$file" 2>/dev/null
@@ -170,6 +161,25 @@ strip_claude_env_exports() {
     /^[[:space:]]*export ANTHROPIC_BASE_URL=/ { next }
     { print }
   ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
+reload_bashrc() {
+  local had_nounset=0
+  if [[ $- == *u* ]]; then
+    had_nounset=1
+    set +u
+  fi
+
+  # shellcheck disable=SC1090
+  if . "${HOME}/.bashrc"; then
+    [ "$had_nounset" -eq 0 ] || set -u
+    success "~/.bashrc 已重新加载"
+    return 0
+  fi
+
+  [ "$had_nounset" -eq 0 ] || set -u
+  warn "已写入 ~/.bashrc，但重新加载失败，请手动执行: source ~/.bashrc"
+  return 1
 }
 
 NODEJS_MAJOR=22
@@ -448,18 +458,14 @@ configure_claude_provider() {
 $auth_export_line
 $base_export_line
 EOF
-)
+  )
   append_block "$bashrc_file" "$CLAUDE_BASHRC_START" "$CLAUDE_BASHRC_END" "$block"
   success "Claude 提供商配置已写入 ${HOME}/.bashrc"
 
-  if [ "$has_existing_config" -eq 0 ]; then
-    log "首次配置 Claude Code，可参考以下命令："
-    log "echo \"$(double_quote_escape "$auth_export_line")\" >> ~/.bashrc"
-    log "echo \"$(double_quote_escape "$base_export_line")\" >> ~/.bashrc"
-  else
+  if [ "$has_existing_config" -ne 0 ]; then
     log "检测到旧的 Claude ANTHROPIC_* 配置，已先清除再覆盖。"
   fi
-  log "source ~/.bashrc"
+  reload_bashrc
 }
 
 configure_codex_provider() {
@@ -586,14 +592,14 @@ show_menu() {
   log "Claude Code"
   log "------------"
   log "1. 安装 Claude Code"
-  log "3. 更换 Claude Code 提供商"
-  log "5. 卸载 Claude Code"
+  log "2. 更换 Claude Code 提供商"
+  log "3. 卸载 Claude Code"
   log ""
   log "------------"
   log "Codex"
   log "------------"
-  log "2. 安装 Codex"
-  log "4. 更换 Codex 提供商"
+  log "4. 安装 Codex"
+  log "5. 更换 Codex 提供商"
   log "6. 卸载 Codex"
   log ""
   log "------------"
@@ -626,19 +632,19 @@ main_loop() {
         pause
         ;;
       2)
-        install_codex
-        pause
-        ;;
-      3)
         configure_claude_provider
         pause
         ;;
+      3)
+        uninstall_claude_code
+        pause
+        ;;
       4)
-        configure_codex_provider
+        install_codex
         pause
         ;;
       5)
-        uninstall_claude_code
+        configure_codex_provider
         pause
         ;;
       6)
